@@ -1,29 +1,62 @@
 name: Build
+
 on:
   push:
   workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Unzip project
-        run: unzip -o SystemClient-1.21.11-github.zip -d project
+
+      - name: Find project (zip or plain files)
+        run: |
+          set -e
+          echo "Files in repo root:"; ls -la
+          ZIP=$(ls -1 *.zip 2>/dev/null | head -n 1 || true)
+          if [ -n "$ZIP" ]; then
+            echo "Using zip: $ZIP"
+            mkdir -p _unzipped
+            unzip -o "$ZIP" -d _unzipped
+            GRADLEW=$(find _unzipped -maxdepth 4 -name gradlew | head -n 1)
+            if [ -z "$GRADLEW" ]; then echo "ERROR: gradlew not found inside the zip"; exit 1; fi
+            echo "PROJECT_DIR=$(dirname "$GRADLEW")" >> "$GITHUB_ENV"
+          elif [ -f gradlew ]; then
+            echo "Using files in repo root"
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+          else
+            echo "ERROR: no zip and no gradlew in the repo root. Upload the project zip or the project files."
+            exit 1
+          fi
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+
       - uses: gradle/actions/setup-gradle@v4
+
       - name: Build
-        working-directory: project
         run: |
+          cd "$PROJECT_DIR"
           chmod +x ./gradlew
           ./gradlew build --no-daemon --stacktrace
-      - name: Release
+          rm -f build/libs/*-sources.jar
+          ls -la build/libs
+
+      - name: Upload jar (Actions artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AFXN-jar
+          path: ${{ env.PROJECT_DIR }}/build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Release (easier download than artifact)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          files: |
-            project/build/libs/*.jar
+          files: ${{ env.PROJECT_DIR }}/build/libs/*.jar
